@@ -1,0 +1,88 @@
+{
+  "name": "omniagent-cli",
+  "version": "0.1.0",
+  "description": "OmniAgent CLI — brand-neutral AI coding assistant",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "omniagent": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/react-loop.d.ts",
+      "import": "./dist/core/react-loop.js"
+    },
+    "./providers": {
+      "types": "./dist/providers/registry.d.ts",
+      "import": "./dist/providers/registry.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/builtin/index.d.ts",
+      "import": "./dist/tools/builtin/index.js"
+    },
+    "./memory": {
+      "types": "./dist/memory/index.d.ts",
+      "import": "./dist/memory/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "test": "node --test --import tsx/esm",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run precheck",
+    "precheck": "node scripts/precheck.js"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "coding-assistant",
+    "llm",
+    "agent",
+    "react-loop",
+    "openai",
+    "anthropic",
+    "bedrock",
+    "ollama"
+  ],
+  "author": "OmniAgent Contributors",
+  "license": "MIT",
+  "homepage": "https://github.com/omniagent/omniagent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omniagent/omniagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/omniagent/omniagent/issues"
+  },
+  "dependencies": {
+    "shell-quote": "^1.9.0",
+    "tiktoken": "^1.0.0",
+    "undici": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/shell-quote": "^1.7.5",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}
