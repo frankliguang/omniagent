@@ -23,15 +23,32 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 import { ReActLoop, type StreamRenderer } from './core/react-loop.js';
 import { WorkingMemory } from './memory/working-memory.js';
+import { TranscriptStore } from './memory/transcript.js';
+import { LocalMemoryEngine, SidechainManager } from './memory/sidechain.js';
+import { BoundaryStore, defaultBoundaryPath } from './memory/boundary.js';
 import { ProviderRegistry } from './providers/registry.js';
 import { CredentialsStore } from './providers/credentials.js';
 import { MemoryRecaller, setMemoryRecaller } from './memory/recaller.js';
 import { BUILTIN_TOOLS } from './tools/builtin/index.js';
-import type { Credentials, LLMProvider } from './types/index.js';
+import { createOrchestrationTools } from './tools/builtin/orchestration/index.js';
+import {
+  TaskManager,
+  Orchestrator,
+  SwarmTeam,
+  TeammateRegistry,
+  WorktreeRoster,
+  InMemoryWorktreeOps,
+  MailboxService,
+  ShutdownHandshake,
+  ThreeStateRecovery,
+  makeReActLoopRunnerFactory,
+} from './orchestration/index.js';
+import type { AgentId, MailboxName, Credentials, LLMProvider, Tool } from './types/index.js';
 
 export const VERSION = '0.1.0';
 const DEFAULT_MODEL: Record<string, string> = {
@@ -246,12 +263,119 @@ async function main(): Promise<void> {
     // 召回失败不影响主流程
   }
 
+  // 构造编排组件（M2 iter 5）
+  // - TaskManager + SidechainManager + Orchestrator: agent_router 5 路径
+  // - SwarmTeam + TeammateRegistry + WorktreeRoster + MailboxService: teammate 路径
+  // - ShutdownHandshake + ThreeStateRecovery: task_stop graceful/force 路径
+  // - makeReActLoopRunnerFactory: 子 agent ReActLoop 适配 SubAgentRunner
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
+  const sessionId = randomUUID();
+  const mainTranscriptPath = path.join(home, '.omniagent', 'transcripts', `${sessionId}.jsonl`);
+  const mainTranscript = await TranscriptStore.load(mainTranscriptPath);
+  const engine = new LocalMemoryEngine(sessionId, mainTranscript);
+  const sidechainManager = new SidechainManager(engine);
+  const boundaryStore = new BoundaryStore({
+    boundaryPath: defaultBoundaryPath(sessionId),
+  });
+  const taskManager = new TaskManager({ boundaryStore, sidechain: sidechainManager });
+  const teammateRegistry = new TeammateRegistry();
+  const worktreeBaseDir = path.join(home, '.omniagent', 'worktrees');
+  const worktreeRoster = new WorktreeRoster(new InMemoryWorktreeOps(worktreeBaseDir));
+  const mailboxService = new MailboxService();
+  const swarmTeam = new SwarmTeam(mailboxService, teammateRegistry, worktreeRoster);
+  const threeStateRecovery = new ThreeStateRecovery(
+    teammateRegistry,
+    mailboxService,
+    worktreeRoster,
+    taskManager,
+    {
+      // M2 iter 5: 注入 restart 回调
+      // 调用 sidechainManager.create + runnerFactory.spawn 重新跑一轮子 agent
+      // mailbox 未读消息保留（restart 不消费，由新 teammate 读取）
+      restart: async (teammateName) => {
+        const teammate = await teammateRegistry.get(teammateName);
+        if (!teammate) {
+          throw new Error(`cannot restart unregistered teammate "${teammateName}"`);
+        }
+        // 创建新 sidechain（保留原 sidechain 数据，新建一个用于新 turn）
+        const sidechainId = await sidechainManager.create({
+          parentTranscriptId: sessionId as never,
+          runtimeTaskId: 'restart-' + Date.now() as never,
+        });
+        const runner = runnerFactory(sidechainId);
+        const result = await runner.runTurn({
+          prompt: `restart: resume work for ${teammateName}`,
+          sidechainId,
+          parentAgentId: teammate.agentId,
+        });
+        await sidechainManager.flush(sidechainId);
+        return {
+          newAgentId: teammate.agentId,
+          detail: `restart turn stopReason=${result.stopReason}, iterations=${result.iterations}`,
+        };
+      },
+    },
+  );
+  const shutdownHandshake = new ShutdownHandshake(mailboxService);
+
+  // 子 agent runner：每个 sidechain 创建独立 ReActLoop（共享 provider + BUILTIN_TOOLS）
+  const runnerFactory = makeReActLoopRunnerFactory({
+    sidechain: sidechainManager,
+    makeLoop: () =>
+      new ReActLoop({
+        provider,
+        memory: new WorkingMemory(),
+        tools: BUILTIN_TOOLS,
+        renderer: makeStdoutRenderer(),
+        model,
+        fallbackModel,
+        systemPrompt,
+        cwd: process.cwd(),
+        maxIterations: 20,
+      }),
+  });
+
+  const orchestrator = new Orchestrator({
+    taskManager,
+    sidechain: sidechainManager,
+    memoryEngine: engine,
+    runnerFactory,
+    swarmTeam,
+  });
+
+  // 主 agent 标识
+  const mainAgentId = 'omniagent-main' as AgentId;
+  const mainMailboxName = 'omniagent-main' as MailboxName;
+
+  // 构造编排工具（agent_router / task_create / task_stop / send_message / task_output）
+  const orchestrationTools: Tool[] = createOrchestrationTools({
+    taskOutput: { taskManager, sidechainManager },
+    agentRouter: { orchestrator, parentAgentId: () => mainAgentId },
+    sendMessage: { mailboxService, parentAgentId: () => mainMailboxName },
+    taskCreate: {
+      taskManager,
+      swarmTeam,
+      parentAgentId: () => mainAgentId,
+    },
+    taskStop: {
+      taskManager,
+      shutdownHandshake,
+      threeStateRecovery,
+      teammateRegistry,
+      swarmTeam,
+      parentAgentId: () => mainAgentId,
+      leaderName: () => mainMailboxName,
+    },
+  });
+
+  const allTools: Tool[] = [...BUILTIN_TOOLS, ...orchestrationTools];
+
   // 构造 ReActLoop
   const memory = new WorkingMemory();
   const loop = new ReActLoop({
     provider,
     memory,
-    tools: BUILTIN_TOOLS,
+    tools: allTools,
     renderer: makeStdoutRenderer(),
     model,
     fallbackModel,
@@ -271,6 +395,10 @@ async function main(): Promise<void> {
   } catch (err) {
     process.stderr.write(`Error: ${(err as Error).message}\n`);
     process.exit(4);
+  } finally {
+    // 关闭 sidechain + 主 transcript（确保 drainWriteQueue flush）
+    await engine.closeAll().catch(() => {});
+    await mainTranscript.close().catch(() => {});
   }
 }
 

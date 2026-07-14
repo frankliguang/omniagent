@@ -14,4 +14,40 @@ export type { MemoryRecallerOptions } from './recaller.js';
 export { TranscriptStore } from './transcript.js';
 export { ResumeService, resumeService } from './resume.js';
 export { SessionCompactor } from './session-compact.js';
-export { BoundaryStore, generateBoundaryId } from './boundary.js';
+export { BoundaryStore, generateBoundaryId, createBoundary } from './boundary.js';
+export {
+  SidechainManager,
+  LocalMemoryEngine,
+  defaultSidechainPath,
+  generateSidechainId,
+} from './sidechain.js';
+export type {
+  MemoryEngine,
+  CreateSidechainParams,
+} from './sidechain.js';
+export {
+  defaultMailboxPath,
+  defaultMailboxArchivePath,
+  writeMailboxAtomic,
+  readMailboxRaw,
+  readMailboxAll,
+  markMailboxRead,
+  mailboxCount,
+  mailboxBytes,
+} from './mailbox.js';
+export {
+  RecoveryHandler,
+  createRecoveryHandler,
+  defaultMailboxDir,
+  defaultTranscriptDir,
+  toErrorMessage,
+  isSidechainId,
+  generateRecoveryId,
+} from './recovery.js';
+export type {
+  RecoveryScenario,
+  DataLossLevel,
+  RecoveryContext,
+  RecoveryResult,
+  RecoveryHandlerDeps,
+} from './recovery.js';

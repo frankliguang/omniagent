@@ -160,18 +160,34 @@ export class TranscriptStore {
       return { ok: true };
     }
 
+    // Sidechain transcript：文件名含 `.sidechain-{id}`
+    // 首条消息可能：
+    //   (a) parentUuid 指向主 transcript fork point（fork 路径显式设置）
+    //   (b) parentUuid=undefined（byte-identical 复制父上下文，不变量 #5）
+    // 两种都合法，fork point 链路由 SidechainManager 的 sidechainMeta 独立跟踪
+    // 链路校验时跳过首条 parentUuid 检查，从第 2 条开始校验内部链路
+    const isSidechain = /\.sidechain-[0-9a-f-]+\.jsonl$/.test(this.transcriptPath);
+
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       const expectedParent = i === 0 ? undefined : messages[i - 1].id;
 
-      // 首条消息不应有 parentUuid
-      if (i === 0 && msg.parentUuid) {
-        return {
-          ok: false,
-          brokenAt: i,
-          scenario: 'SCENARIO_TRANSCRIPT_CORRUPT',
-          detail: `first message has parentUuid=${msg.parentUuid} (should be undefined)`,
-        };
+      // 首条消息：
+      // - sidechain：parentUuid 可有可无（见上文注释），跳过首条检查
+      // - 主 transcript：不应有 parentUuid
+      if (i === 0) {
+        if (isSidechain) {
+          continue;  // sidechain 首条 parentUuid 由 ForkAgentSpawner 决定（byte-identical 或显式 fork point）
+        }
+        // 主 transcript：首条消息不应有 parentUuid
+        if (msg.parentUuid) {
+          return {
+            ok: false,
+            brokenAt: i,
+            scenario: 'SCENARIO_TRANSCRIPT_CORRUPT',
+            detail: `first message has parentUuid=${msg.parentUuid} (should be undefined)`,
+          };
+        }
       }
 
       // 非首条消息：parentUuid 应指向上一条 id
